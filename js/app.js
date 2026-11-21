@@ -7,26 +7,35 @@ document.addEventListener("DOMContentLoaded", () => {
   // Application State
   const state = {
     currentView: "dashboard",
-    currentDeckKey: "c1-academic",
+    selectedLevel: Storage.getSelectedLevel() || "all",
+    flashcardCategory: "all",
+    flashcardStatus: "all",
+    flashcardCards: [],
     currentCardIndex: 0,
     currentReviewIndex: 0,
     quizQuestionIndex: 0,
     quizScore: 0,
-    dictFilterStatus: "all",
     dictSearchQuery: "",
-    learnFilterLevel: "all"
+    dictLevel: "all",
+    dictCategory: "all",
+    dictStatus: "all",
+    learnFilterLevel: "all",
+    learnCategory: "all",
+    voiceAccent: Storage.getSettings().accentVoice || "en-US",
+    voiceSpeed: parseFloat(Storage.getSettings().playbackSpeed) || 1.0,
+    lastSpokenWord: "Serendipity"
   };
 
   // ========================================================
-  // 1. ROUTING & NAVIGATION
+  // 1. ROUTING & VIEW CONTROLLER
   // ========================================================
   const viewTitles = {
     dashboard: { title: "Dashboard", subtitle: "Welcome back, Alex · Let's master 5 more words today" },
-    learn: { title: "Learn Words", subtitle: "Systematic CEFR-aligned vocabulary curriculum" },
-    flashcards: { title: "Flashcards", subtitle: "Active recall study sets with 3D flip and native pronunciation" },
+    learn: { title: "Learn Words", subtitle: "Systematic CEFR curriculum with General English & IELTS vocabulary" },
+    flashcards: { title: "Flashcards", subtitle: "Active recall study sets with illustrations, Uzbek meanings & native speech" },
     games: { title: "Games & Arena", subtitle: "Gamified vocabulary drills to strengthen recall speed" },
     ielts: { title: "IELTS Vocabulary", subtitle: "Academic Band 8.0 - 9.0 Lexicon & Collocations for Task 2" },
-    dictionary: { title: "My Dictionary", subtitle: "Your personal word bank and custom vocabulary journal" },
+    dictionary: { title: "My Dictionary", subtitle: "Bilingual English-Uzbek word bank with real-time search & filters" },
     review: { title: "Spaced Repetition Review", subtitle: "Scientifically scheduled reviews for permanent retention" },
     statistics: { title: "Learning Analytics", subtitle: "In-depth insights into your CEFR progress and retention curve" },
     settings: { title: "Settings & Preferences", subtitle: "Manage speech engine, daily targets, and account options" }
@@ -84,7 +93,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // View specific initializations
     if (viewName === "flashcards") {
-      renderFlashcard();
+      loadFlashcardDeck();
     } else if (viewName === "dictionary") {
       renderDictionary();
     } else if (viewName === "review") {
@@ -92,8 +101,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (viewName === "learn") {
       renderLearnUnits();
     } else if (viewName === "games") {
-      renderGameModes();
-      renderQuizQuestion();
+      if (typeof GamesEngine !== "undefined") {
+        GamesEngine.init();
+      }
     } else if (viewName === "ielts") {
       renderIeltsTopics();
     } else if (viewName === "statistics") {
@@ -139,19 +149,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const mobileDrawerClose = document.getElementById("mobile-drawer-close");
   const mobileNavItems = document.getElementById("mobile-nav-items");
 
-  // Populate mobile drawer nav items
   function buildMobileDrawerItems() {
     if (!mobileNavItems) return;
     mobileNavItems.innerHTML = "";
     
     const navItems = [
       { id: "dashboard", label: "Dashboard", icon: "layout-dashboard" },
-      { id: "learn", label: "Learn Words", icon: "book-open", badge: "6 Units" },
+      { id: "learn", label: "Learn Words", icon: "book-open", badge: "A1-C1" },
       { id: "flashcards", label: "Flashcards", icon: "layers" },
       { id: "games", label: "Games", icon: "gamepad-2", badge: "Play" },
       { id: "ielts", label: "IELTS Vocabulary", icon: "award", badge: "Band 8+" },
       { id: "dictionary", label: "My Dictionary", icon: "bookmark" },
-      { id: "review", label: "Review", icon: "rotate-ccw", badge: "8 Due" },
+      { id: "review", label: "Review", icon: "rotate-ccw", badge: "SRS" },
       { id: "statistics", label: "Statistics", icon: "bar-chart-3" },
       { id: "settings", label: "Settings", icon: "settings" }
     ];
@@ -229,24 +238,53 @@ document.addEventListener("DOMContentLoaded", () => {
   if (themeToggleDrawer) themeToggleDrawer.addEventListener("click", toggleTheme);
 
   // ========================================================
-  // 4. AUDIO / PRONUNCIATION ENGINE (Web Speech API)
+  // 4. AUDIO & SPEECH SYNTHESIS ENGINE (Web Speech API)
   // ========================================================
+  let availableVoices = [];
+
+  function loadVoices() {
+    if ('speechSynthesis' in window) {
+      availableVoices = window.speechSynthesis.getVoices();
+    }
+  }
+
+  if ('speechSynthesis' in window) {
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  }
+
   function playAudio(text, btnElement = null) {
     if (!('speechSynthesis' in window)) {
       showToast("Speech synthesis not supported in this browser", "warning");
       return;
     }
 
-    // Cancel current speaking
+    if (!text) return;
+    state.lastSpokenWord = text;
+
+    // Cancel any active speech
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    const settings = Storage.getSettings();
-    utterance.lang = settings.accentVoice || "en-US";
-    utterance.rate = parseFloat(settings.playbackSpeed) || 1.0;
+    utterance.rate = state.voiceSpeed || 1.0;
     utterance.pitch = 1.0;
 
-    // Optional animation on button
+    // Pick British or American voice based on user preference
+    const targetLang = state.voiceAccent || "en-US";
+    utterance.lang = targetLang;
+
+    if (availableVoices.length > 0) {
+      let matchedVoice = null;
+      if (targetLang === "en-GB") {
+        matchedVoice = availableVoices.find(v => v.lang === "en-GB" || v.name.toLowerCase().includes("british") || v.name.toLowerCase().includes("uk"));
+      } else {
+        matchedVoice = availableVoices.find(v => v.lang === "en-US" || v.name.toLowerCase().includes("united states") || v.name.toLowerCase().includes("us"));
+      }
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+      }
+    }
+
     if (btnElement) {
       btnElement.classList.add("audio-playing");
       utterance.onend = () => btnElement.classList.remove("audio-playing");
@@ -254,6 +292,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     window.speechSynthesis.speak(utterance);
+  }
+
+  function repeatLastAudio() {
+    if (state.lastSpokenWord) {
+      playAudio(state.lastSpokenWord);
+      showToast(`Repeating: "${state.lastSpokenWord}"`, "info");
+    }
   }
 
   // Global delegate for audio buttons with data-pronounce attribute
@@ -313,8 +358,12 @@ document.addEventListener("DOMContentLoaded", () => {
   // 6. DASHBOARD COMPONENTS & METRICS
   // ========================================================
   function updateDashboardMetrics() {
+    window.updateDashboardMetrics = updateDashboardMetrics;
     const user = Storage.getUser();
-    
+    const vocabList = Storage.getAllVocabulary();
+    const masteredCount = vocabList.filter(w => w.isMastered).length;
+    const learningCount = vocabList.length - masteredCount;
+
     // Header pills
     const headerStreak = document.getElementById("header-streak-count");
     const headerXp = document.getElementById("header-xp-count");
@@ -341,13 +390,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mGoal) mGoal.textContent = user.wordsLearnedToday;
     if (mStreak) mStreak.textContent = user.currentStreak;
     if (mXp) mXp.textContent = user.xp.toLocaleString();
-    if (mTotal) mTotal.textContent = user.totalWordsLearned;
+    if (mTotal) mTotal.textContent = vocabList.length;
 
     // Dictionary count badge
     const dictCount = document.getElementById("sidebar-dict-count");
     if (dictCount) {
-      const words = Storage.getDictionary();
-      dictCount.textContent = words.length;
+      dictCount.textContent = vocabList.length;
     }
 
     // Review due badge
@@ -374,12 +422,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
       col.innerHTML = `
         <div class="relative w-full flex flex-col items-center justify-end h-36">
-          <!-- Tooltip on hover -->
           <div class="absolute -top-10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-slate-900 text-white text-[10px] font-bold py-1 px-2 rounded-md shadow-lg whitespace-nowrap z-20">
             ${item.words} words · ${item.xp} XP
           </div>
-          
-          <!-- Bar -->
           <div class="w-7 sm:w-10 rounded-t-xl transition-all duration-300 group-hover:brightness-110 ${isToday ? 'bg-gradient-to-t from-brand-600 to-accent-purple shadow-md shadow-brand-500/20' : 'bg-slate-200 dark:bg-slate-700 group-hover:bg-brand-300'}" style="height: ${heightPct}%;">
           </div>
         </div>
@@ -405,7 +450,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (titleEl) titleEl.textContent = today.word;
     if (phoneEl) phoneEl.textContent = today.phonetic;
-    if (posEl) posEl.textContent = today.partOfSpeech;
+    if (posEl) posEl.textContent = `${today.partOfSpeech} · Uzbek: ${today.uzbek}`;
     if (defEl) defEl.textContent = today.definition;
     if (exEl) exEl.textContent = `"${today.example}"`;
 
@@ -421,26 +466,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (saveBtn) {
       saveBtn.onclick = () => {
-        const dict = Storage.getDictionary();
-        const exists = dict.find(w => w.word.toLowerCase() === today.word.toLowerCase());
-        if (!exists) {
-          Storage.addDictionaryWord({
-            word: today.word,
-            phonetic: today.phonetic,
-            partOfSpeech: today.partOfSpeech,
-            level: today.level,
-            definition: today.definition,
-            example: today.example,
-            tags: ["Featured", "Daily"]
-          });
-          showToast(`"${today.word}" added to your dictionary!`, "success");
-          if (saveText) saveText.textContent = "Saved in Dictionary ✓";
-          saveBtn.classList.add("bg-emerald-600");
-          saveBtn.classList.remove("bg-brand-600");
-          updateDashboardMetrics();
-        } else {
-          showToast(`"${today.word}" is already in your dictionary.`, "info");
-        }
+        Storage.toggleFavorite("v-c1-22");
+        showToast(`Saved "${today.word}" to your Starred vocabulary!`, "success");
+        if (saveText) saveText.textContent = "Saved in Dictionary ✓";
+        saveBtn.classList.add("bg-emerald-600");
+        saveBtn.classList.remove("bg-brand-600");
+        updateDashboardMetrics();
       };
     }
   }
@@ -462,11 +493,14 @@ document.addEventListener("DOMContentLoaded", () => {
             <i data-lucide="volume-2" class="w-3.5 h-3.5"></i>
           </button>
           <div>
-            <span class="text-xs font-bold text-slate-900 dark:text-white block">${item.word}</span>
-            <span class="text-[10px] text-slate-400">${item.partOfSpeech} · Score: ${item.retentionScore}%</span>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-slate-900 dark:text-white">${item.word}</span>
+              <span class="text-[10px] text-brand-600 font-semibold">(${item.uzbek})</span>
+            </div>
+            <span class="text-[10px] text-slate-400">${item.level} · ${item.category}</span>
           </div>
         </div>
-        <span class="text-[10px] font-bold px-2 py-0.5 rounded-md ${item.urgency === 'urgent' ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-600' : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700'}">
+        <span class="text-[10px] font-bold px-2 py-0.5 rounded-md ${item.urgency === 'urgent' ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700' : 'bg-indigo-100 dark:bg-indigo-950/60 text-brand-700'}">
           ${item.dueInterval}
         </span>
       `;
@@ -500,23 +534,45 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ========================================================
-  // 7. LEARN WORDS VIEW
+  // 7. LEARN WORDS VIEW (CEFR Levels & Categories)
   // ========================================================
   function renderLearnUnits() {
     const grid = document.getElementById("learning-units-grid");
     if (!grid) return;
     grid.innerHTML = "";
 
-    const filtered = initialData.learningUnits.filter(unit => {
-      if (state.learnFilterLevel === "all") return true;
-      return unit.level.includes(state.learnFilterLevel);
+    const allVocab = Storage.getAllVocabulary();
+
+    // Filter units by CEFR level & category
+    const filteredUnits = initialData.learningUnits.filter(unit => {
+      const matchesLevel = state.learnFilterLevel === "all" || unit.level === state.learnFilterLevel;
+      const matchesCat = state.learnCategory === "all" || unit.category.toLowerCase().includes(state.learnCategory.toLowerCase());
+      return matchesLevel && matchesCat;
     });
 
-    filtered.forEach(unit => {
+    if (filteredUnits.length === 0) {
+      grid.innerHTML = `
+        <div class="col-span-full text-center py-12 bg-white dark:bg-[#111827] rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 p-8">
+          <i data-lucide="book-open" class="w-10 h-10 text-brand-500 mx-auto mb-3"></i>
+          <h4 class="font-bold text-base text-slate-900 dark:text-white">No units match the selected filters</h4>
+          <p class="text-xs text-slate-400 mt-1">Try switching to "All Levels" or reset category filters.</p>
+        </div>
+      `;
+      refreshIcons();
+      return;
+    }
+
+    filteredUnits.forEach(unit => {
+      // Calculate real counts from master vocabulary
+      const unitWords = allVocab.filter(w => w.level === unit.level);
+      const masteredInUnit = unitWords.filter(w => w.isMastered).length;
+      const totalInUnit = unitWords.length || unit.totalWords;
+      const progressPct = totalInUnit > 0 ? Math.round((masteredInUnit / totalInUnit) * 100) : 0;
+      const isCompleted = progressPct === 100;
+
       const card = document.createElement("div");
       card.className = "bg-white dark:bg-[#111827] rounded-3xl p-6 border border-slate-200/80 dark:border-slate-800/80 shadow-xs hover:shadow-md transition-all interactive-card flex flex-col justify-between";
       
-      const isCompleted = unit.progress === 100;
       card.innerHTML = `
         <div>
           <div class="flex items-center justify-between mb-4">
@@ -524,8 +580,8 @@ document.addEventListener("DOMContentLoaded", () => {
               <i data-lucide="${unit.icon}" class="w-6 h-6"></i>
             </div>
             <div class="flex items-center gap-2">
-              <span class="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">${unit.level}</span>
-              ${isCompleted ? '<span class="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600">Done ✓</span>' : ''}
+              <span class="text-xs font-bold px-3 py-1 rounded-full bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-800">${unit.level}</span>
+              ${isCompleted ? '<span class="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600">Mastered ✓</span>' : ''}
             </div>
           </div>
 
@@ -535,21 +591,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
         <div>
           <div class="flex items-center justify-between text-xs font-bold mb-2">
-            <span class="text-slate-400">${unit.completedWords} / ${unit.totalWords} Words</span>
-            <span class="text-brand-600 dark:text-brand-400">${unit.progress}%</span>
+            <span class="text-slate-400">${masteredInUnit} / ${totalInUnit} Words Mastered</span>
+            <span class="text-brand-600 dark:text-brand-400 font-extrabold">${progressPct}%</span>
           </div>
 
           <div class="w-full h-2.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden mb-4">
-            <div class="h-full bg-gradient-to-r from-brand-500 to-accent-purple rounded-full progress-pill" style="width: ${unit.progress}%"></div>
+            <div class="h-full bg-gradient-to-r from-brand-500 to-accent-purple rounded-full progress-pill" style="width: ${progressPct}%"></div>
           </div>
 
           <div class="flex items-center gap-2">
-            <button class="study-unit-btn flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-2" data-unit-id="${unit.id}">
-              <i data-lucide="play" class="w-3.5 h-3.5 fill-white"></i>
-              <span>Study Unit</span>
+            <button class="study-unit-btn flex-1 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-2" data-unit-level="${unit.level}">
+              <i data-lucide="layers" class="w-3.5 h-3.5"></i>
+              <span>Study ${unit.level} Flashcards</span>
             </button>
-            <button class="preview-unit-words-btn p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 transition-colors" data-unit-id="${unit.id}" title="Word List">
-              <i data-lucide="list" class="w-4 h-4"></i>
+            <button class="preview-unit-words-btn p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 transition-colors" data-unit-level="${unit.level}" title="Browse words in Dictionary">
+              <i data-lucide="book-open" class="w-4 h-4"></i>
             </button>
           </div>
         </div>
@@ -558,37 +614,51 @@ document.addEventListener("DOMContentLoaded", () => {
       grid.appendChild(card);
     });
 
-    // Attach click listeners to Study Unit buttons
+    // Attach click listeners to Study buttons
     grid.querySelectorAll(".study-unit-btn").forEach(btn => {
       btn.addEventListener("click", () => {
+        const lvl = btn.getAttribute("data-unit-level");
+        state.selectedLevel = lvl;
+        Storage.setSelectedLevel(lvl);
         switchView("flashcards");
-        showToast("Loaded flashcard deck for this unit", "info");
+        showToast(`Loaded ${lvl} vocabulary flashcards`, "info");
       });
     });
 
     grid.querySelectorAll(".preview-unit-words-btn").forEach(btn => {
       btn.addEventListener("click", () => {
+        const lvl = btn.getAttribute("data-unit-level");
+        state.dictLevel = lvl;
         switchView("dictionary");
-        showToast("Filtered dictionary for unit words", "info");
+        showToast(`Filtered dictionary by CEFR level ${lvl}`, "info");
       });
     });
+
+    refreshIcons();
   }
 
   // Learn level filter tabs
   document.querySelectorAll(".learn-filter-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".learn-filter-btn").forEach(b => {
-        b.className = "learn-filter-btn px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white";
+        b.className = "learn-filter-btn px-2.5 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white";
       });
       btn.className = "learn-filter-btn px-3 py-1.5 rounded-lg bg-white dark:bg-[#111827] text-brand-600 dark:text-brand-400 shadow-xs font-bold";
       state.learnFilterLevel = btn.getAttribute("data-filter") || "all";
       renderLearnUnits();
-      refreshIcons();
     });
   });
 
+  const learnCategorySelect = document.getElementById("learn-category-select");
+  if (learnCategorySelect) {
+    learnCategorySelect.addEventListener("change", (e) => {
+      state.learnCategory = e.target.value;
+      renderLearnUnits();
+    });
+  }
+
   // ========================================================
-  // 8. FLASHCARDS CONTROLLER (3D Flip & Anki-Style Rating)
+  // 8. FLASHCARDS CONTROLLER (3D Flip, Audio, Images & Rating)
   // ========================================================
   const flashcardContainer = document.getElementById("flashcard-flip-container");
   const flashcardInner = document.getElementById("flashcard-inner");
@@ -606,16 +676,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (flashcardContainer) {
     flashcardContainer.addEventListener("click", (e) => {
-      // Don't flip if clicking direct audio buttons or interactive elements
-      if (e.target.closest(".audio-btn") || e.target.closest("button")) return;
+      if (e.target.closest(".audio-btn") || e.target.closest("button") || e.target.closest("select")) return;
       flipCard();
     });
   }
 
-  // Spacebar flips card; Arrow keys navigate
+  // Spacebar flips card; Arrow keys navigate; 'R' repeats audio
   document.addEventListener("keydown", (e) => {
     if (state.currentView !== "flashcards") return;
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
 
     if (e.code === "Space") {
       e.preventDefault();
@@ -624,359 +693,324 @@ document.addEventListener("DOMContentLoaded", () => {
       nextCard();
     } else if (e.code === "ArrowLeft") {
       prevCard();
+    } else if (e.key.toLowerCase() === "r") {
+      repeatLastAudio();
     }
   });
 
-  function getActiveDeck() {
-    const decks = Storage.getFlashcardDecks();
-    return decks[state.currentDeckKey] || decks["c1-academic"];
+  function loadFlashcardDeck() {
+    state.flashcardCards = Storage.getFilteredVocabulary({
+      level: state.selectedLevel,
+      category: state.flashcardCategory,
+      status: state.flashcardStatus
+    });
+
+    if (state.currentCardIndex >= state.flashcardCards.length) {
+      state.currentCardIndex = 0;
+    }
+
+    // Sync CEFR chips active state
+    document.querySelectorAll(".fc-level-chip").forEach(chip => {
+      if (chip.getAttribute("data-level") === state.selectedLevel) {
+        chip.className = "fc-level-chip px-3 py-1.5 rounded-xl text-xs font-bold bg-brand-600 text-white shadow-xs";
+      } else {
+        chip.className = "fc-level-chip px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200";
+      }
+    });
+
+    // Sync Category & Status Selects
+    const catSelect = document.getElementById("fc-category-select");
+    const statusSelect = document.getElementById("fc-status-select");
+    if (catSelect) catSelect.value = state.flashcardCategory;
+    if (statusSelect) statusSelect.value = state.flashcardStatus;
+
+    renderFlashcard();
   }
 
   function renderFlashcard() {
-    const deck = getActiveDeck();
-    const cards = deck.cards;
-    if (!cards || cards.length === 0) return;
+    const cards = state.flashcardCards;
+    const counter = document.getElementById("flashcard-counter");
+    const progBar = document.getElementById("flashcard-progress-bar");
+    const deckBadge = document.getElementById("flashcard-deck-badge");
+
+    // Reset flip orientation
+    isCardFlipped = false;
+    if (flashcardInner) flashcardInner.classList.remove("rotate-y-180");
+
+    if (!cards || cards.length === 0) {
+      if (counter) counter.textContent = "0 Cards";
+      if (progBar) progBar.style.width = "0%";
+      if (deckBadge) deckBadge.textContent = "Empty Selection";
+
+      const frontWord = document.getElementById("fc-front-word");
+      const frontPhonetic = document.getElementById("fc-front-phonetic");
+      const frontPos = document.getElementById("fc-front-pos");
+      const frontImg = document.getElementById("fc-front-img");
+      const fallbackBox = document.getElementById("fc-front-img-fallback");
+
+      if (frontWord) frontWord.textContent = "No Cards Match Filter";
+      if (frontPhonetic) frontPhonetic.textContent = "Select 'All Levels' or change category";
+      if (frontPos) frontPos.textContent = "";
+      if (frontImg) frontImg.style.display = "none";
+      if (fallbackBox) fallbackBox.classList.remove("hidden");
+      return;
+    }
 
     if (state.currentCardIndex >= cards.length) state.currentCardIndex = 0;
     if (state.currentCardIndex < 0) state.currentCardIndex = cards.length - 1;
 
     const card = cards[state.currentCardIndex];
-
-    // Reset flip orientation
-    isCardFlipped = false;
-    if (flashcardInner) flashcardInner.classList.remove("rotate-y-180");
+    state.lastSpokenWord = card.word;
 
     // Front elements
     const frontWord = document.getElementById("fc-front-word");
     const frontPhonetic = document.getElementById("fc-front-phonetic");
     const frontPos = document.getElementById("fc-front-pos");
     const frontAudio = document.getElementById("fc-front-audio");
+    const frontImg = document.getElementById("fc-front-img");
+    const fallbackBox = document.getElementById("fc-front-img-fallback");
+    const frontLevelBadge = document.getElementById("fc-front-level-badge");
+    const frontCategoryBadge = document.getElementById("fc-front-category-badge");
+    const diffIndicator = document.getElementById("fc-difficult-indicator");
+    const knownIndicator = document.getElementById("fc-known-indicator");
+    const starBtn = document.getElementById("fc-star-btn");
 
     if (frontWord) frontWord.textContent = card.word;
     if (frontPhonetic) frontPhonetic.textContent = card.phonetic;
     if (frontPos) frontPos.textContent = card.partOfSpeech;
-    if (frontAudio) {
-      frontAudio.setAttribute("data-pronounce", card.word);
+    if (frontLevelBadge) frontLevelBadge.textContent = card.level;
+    if (frontCategoryBadge) frontCategoryBadge.textContent = card.category;
+    if (frontAudio) frontAudio.setAttribute("data-pronounce", card.word);
+
+    // Front Image handling with graceful fallback
+    if (frontImg && fallbackBox) {
+      if (card.image) {
+        frontImg.src = card.image;
+        frontImg.alt = `${card.word} illustration`;
+        frontImg.style.display = "block";
+        fallbackBox.classList.add("hidden");
+      } else {
+        frontImg.style.display = "none";
+        fallbackBox.classList.remove("hidden");
+      }
+    }
+
+    // Status indicators
+    if (diffIndicator) diffIndicator.classList.toggle("hidden", !card.isDifficult);
+    if (knownIndicator) knownIndicator.classList.toggle("hidden", !card.isMastered);
+    if (starBtn) {
+      starBtn.classList.toggle("text-amber-500", !!card.isFavorite);
+      starBtn.classList.toggle("text-slate-400", !card.isFavorite);
     }
 
     // Back elements
+    const backUzbek = document.getElementById("fc-back-uzbek");
     const backDef = document.getElementById("fc-back-definition");
     const backEx = document.getElementById("fc-back-example");
+    const backUzbekSent = document.getElementById("fc-back-uzbek-sentence");
     const backSyn = document.getElementById("fc-back-synonyms");
     const backLevel = document.getElementById("fc-back-level");
+    const backPos = document.getElementById("fc-back-pos");
+    const backAudio = document.getElementById("fc-back-audio");
 
+    if (backUzbek) backUzbek.textContent = card.uzbek;
     if (backDef) backDef.textContent = card.definition;
     if (backEx) backEx.textContent = `"${card.example}"`;
-    if (backSyn) backSyn.textContent = card.synonyms ? card.synonyms.join(", ") : "N/A";
-    if (backLevel) backLevel.textContent = card.level || "C1";
+    if (backUzbekSent) backUzbekSent.textContent = `"${card.uzbekSentence || ''}"`;
+    if (backSyn) backSyn.textContent = card.synonyms && card.synonyms.length > 0 ? card.synonyms.join(", ") : "N/A";
+    if (backLevel) backLevel.textContent = card.level;
+    if (backPos) backPos.textContent = card.partOfSpeech;
+    if (backAudio) backAudio.setAttribute("data-pronounce", card.word);
 
     // Counter & Progress Bar
-    const counter = document.getElementById("flashcard-counter");
-    const progBar = document.getElementById("flashcard-progress-bar");
-    const deckBadge = document.getElementById("flashcard-deck-badge");
-
     if (counter) counter.textContent = `Card ${state.currentCardIndex + 1} of ${cards.length}`;
-    if (deckBadge) deckBadge.textContent = `${card.level} · ${card.partOfSpeech}`;
+    if (deckBadge) deckBadge.textContent = `${state.selectedLevel === 'all' ? 'All Levels' : state.selectedLevel} · ${card.category}`;
     if (progBar) {
       const pct = Math.round(((state.currentCardIndex + 1) / cards.length) * 100);
       progBar.style.width = `${pct}%`;
-    }
-
-    // Star icon state
-    const starBtn = document.getElementById("fc-star-btn");
-    if (starBtn) {
-      starBtn.classList.toggle("text-amber-500", !!card.mastered);
     }
 
     refreshIcons();
   }
 
   function nextCard() {
-    const deck = getActiveDeck();
-    state.currentCardIndex = (state.currentCardIndex + 1) % deck.cards.length;
+    if (state.flashcardCards.length === 0) return;
+    state.currentCardIndex = (state.currentCardIndex + 1) % state.flashcardCards.length;
     renderFlashcard();
   }
 
   function prevCard() {
-    const deck = getActiveDeck();
-    state.currentCardIndex = (state.currentCardIndex - 1 + deck.cards.length) % deck.cards.length;
+    if (state.flashcardCards.length === 0) return;
+    state.currentCardIndex = (state.currentCardIndex - 1 + state.flashcardCards.length) % state.flashcardCards.length;
     renderFlashcard();
   }
 
+  // Flashcard Control Listeners
   const fcNextBtn = document.getElementById("fc-next-btn");
   const fcPrevBtn = document.getElementById("fc-prev-btn");
   const fcShuffleBtn = document.getElementById("fc-shuffle-btn");
-  const fcDeckSelect = document.getElementById("flashcard-deck-select");
-  const fcMasteredBtn = document.getElementById("fc-mastered-btn");
+  const fcStarBtn = document.getElementById("fc-star-btn");
+  const fcDifficultBtn = document.getElementById("fc-difficult-btn");
   const fcLearningBtn = document.getElementById("fc-learning-btn");
+  const fcMasteredBtn = document.getElementById("fc-mastered-btn");
+  const fcRepeatAudio = document.getElementById("fc-repeat-audio");
 
   if (fcNextBtn) fcNextBtn.addEventListener("click", nextCard);
   if (fcPrevBtn) fcPrevBtn.addEventListener("click", prevCard);
 
   if (fcShuffleBtn) {
     fcShuffleBtn.addEventListener("click", () => {
-      const deck = getActiveDeck();
-      deck.cards.sort(() => Math.random() - 0.5);
+      state.flashcardCards.sort(() => Math.random() - 0.5);
       state.currentCardIndex = 0;
       renderFlashcard();
-      showToast("Cards shuffled!", "info");
+      showToast("Deck shuffled randomly!", "info");
     });
   }
 
-  if (fcDeckSelect) {
-    fcDeckSelect.addEventListener("change", (e) => {
-      state.currentDeckKey = e.target.value;
-      state.currentCardIndex = 0;
-      renderFlashcard();
+  if (fcStarBtn) {
+    fcStarBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const card = state.flashcardCards[state.currentCardIndex];
+      if (card) {
+        const isFav = Storage.toggleFavorite(card.id);
+        card.isFavorite = isFav;
+        renderFlashcard();
+        showToast(isFav ? `Starred "${card.word}" ⭐` : `Removed "${card.word}" from favorites`, "info");
+      }
     });
   }
 
-  if (fcMasteredBtn) {
-    fcMasteredBtn.addEventListener("click", () => {
-      const deck = getActiveDeck();
-      const card = deck.cards[state.currentCardIndex];
-      Storage.updateCardMastery(state.currentDeckKey, card.id, true);
-      Storage.addXP(15);
-      Storage.recordWordLearned();
-      showToast(`Mastered "${card.word}"! +15 XP earned 🌟`, "success");
-      updateDashboardMetrics();
-      nextCard();
+  if (fcDifficultBtn) {
+    fcDifficultBtn.addEventListener("click", () => {
+      const card = state.flashcardCards[state.currentCardIndex];
+      if (card) {
+        Storage.markDifficult(card.id, true);
+        card.isDifficult = true;
+        card.isMastered = false;
+        showToast(`Marked "${card.word}" as Difficult ⚠️ Added to review queue.`, "warning");
+        updateDashboardMetrics();
+        nextCard();
+      }
     });
   }
 
   if (fcLearningBtn) {
     fcLearningBtn.addEventListener("click", () => {
-      const deck = getActiveDeck();
-      const card = deck.cards[state.currentCardIndex];
-      Storage.updateCardMastery(state.currentDeckKey, card.id, false);
-      showToast(`Keep practicing "${card.word}". Added to review queue.`, "info");
-      nextCard();
+      const card = state.flashcardCards[state.currentCardIndex];
+      if (card) {
+        showToast(`Keep practicing "${card.word}".`, "info");
+        nextCard();
+      }
     });
   }
 
-  // ========================================================
-  // 9. GAMES VIEW & SPEED QUIZ BLITZ DEMO
-  // ========================================================
-  function renderGameModes() {
-    const grid = document.getElementById("all-games-grid");
-    if (!grid) return;
-    grid.innerHTML = "";
-
-    initialData.gameModes.forEach(mode => {
-      const card = document.createElement("div");
-      card.className = "bg-white dark:bg-[#111827] rounded-3xl p-6 sm:p-7 border border-slate-200/80 dark:border-slate-800/80 shadow-xs hover:shadow-md transition-all interactive-card flex flex-col justify-between";
-      card.innerHTML = `
-        <div>
-          <div class="flex items-center justify-between mb-4">
-            <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr ${mode.color} text-white flex items-center justify-center font-bold shadow-md">
-              <i data-lucide="${mode.icon}" class="w-6 h-6"></i>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-[11px] font-bold px-2.5 py-1 rounded-full ${mode.lightBg} text-slate-700 dark:text-slate-300">${mode.badge}</span>
-              <span class="text-[11px] font-extrabold px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600">${mode.xpReward}</span>
-            </div>
-          </div>
-
-          <h3 class="font-display font-bold text-xl text-slate-900 dark:text-white mb-1">${mode.title}</h3>
-          <p class="text-xs text-brand-600 dark:text-brand-400 font-semibold mb-2">${mode.subtitle}</p>
-          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-6">${mode.description}</p>
-        </div>
-
-        <div class="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <span class="text-xs text-slate-400 font-medium">${mode.activePlayers}</span>
-          <button class="launch-quick-quiz-btn px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs hover:bg-slate-800 dark:hover:bg-slate-100 shadow-sm transition-all">
-            Play Game
-          </button>
-        </div>
-      `;
-      grid.appendChild(card);
-    });
-
-    grid.querySelectorAll(".launch-quick-quiz-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        switchView("games");
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        showToast("Ready for Speed Quiz! Choose an answer below.", "info");
-      });
+  if (fcMasteredBtn) {
+    fcMasteredBtn.addEventListener("click", () => {
+      const card = state.flashcardCards[state.currentCardIndex];
+      if (card) {
+        Storage.markKnown(card.id, true);
+        card.isMastered = true;
+        card.isDifficult = false;
+        showToast(`Mastered "${card.word}" (${card.uzbek})! +15 XP earned 🌟`, "success");
+        updateDashboardMetrics();
+        nextCard();
+      }
     });
   }
 
-  // Interactive Playable Mini Demo in Games View
-  function renderQuizQuestion() {
-    const qIndex = state.quizQuestionIndex % initialData.quickQuizQuestions.length;
-    const q = initialData.quickQuizQuestions[qIndex];
-
-    const qNum = document.getElementById("quiz-question-number");
-    const qText = document.getElementById("quiz-question-text");
-    const optContainer = document.getElementById("quiz-options-container");
-    const feedbackBox = document.getElementById("quiz-feedback-box");
-
-    if (qNum) qNum.textContent = `Question ${qIndex + 1} of ${initialData.quickQuizQuestions.length}`;
-    if (qText) qText.textContent = q.question;
-    if (feedbackBox) {
-      feedbackBox.classList.add("hidden");
-      feedbackBox.className = "mt-4 p-3 rounded-xl hidden text-xs font-semibold";
-    }
-
-    if (!optContainer) return;
-    optContainer.innerHTML = "";
-
-    q.options.forEach((opt, idx) => {
-      const btn = document.createElement("button");
-      btn.className = "quiz-opt-btn p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-brand-500 bg-slate-50 dark:bg-slate-800 font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100 text-left transition-all flex items-center justify-between";
-      btn.innerHTML = `
-        <span>${opt}</span>
-        <span class="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs flex items-center justify-center">${['A', 'B', 'C', 'D'][idx]}</span>
-      `;
-
-      btn.addEventListener("click", () => {
-        // Disable other buttons
-        optContainer.querySelectorAll("button").forEach(b => b.disabled = true);
-
-        if (idx === q.answerIndex) {
-          btn.classList.add("bg-emerald-500", "text-white", "border-emerald-600");
-          Storage.addXP(25);
-          updateDashboardMetrics();
-          showToast("Correct! +25 XP awarded 🚀", "success");
-
-          if (feedbackBox) {
-            feedbackBox.classList.remove("hidden");
-            feedbackBox.classList.add("bg-emerald-50", "dark:bg-emerald-950/40", "text-emerald-700", "dark:text-emerald-300");
-            feedbackBox.innerHTML = `
-              <div class="flex items-center justify-between">
-                <span>✓ Excellent! ${q.explanation}</span>
-                <button id="quiz-next-q-btn" class="ml-2 px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700">Next Question →</button>
-              </div>
-            `;
-            document.getElementById("quiz-next-q-btn")?.addEventListener("click", () => {
-              state.quizQuestionIndex++;
-              renderQuizQuestion();
-            });
-          }
-        } else {
-          btn.classList.add("bg-rose-500", "text-white", "border-rose-600");
-          // highlight correct one
-          const correctBtn = optContainer.querySelectorAll("button")[q.answerIndex];
-          if (correctBtn) correctBtn.classList.add("bg-emerald-100", "dark:bg-emerald-900/50", "border-emerald-500");
-
-          if (feedbackBox) {
-            feedbackBox.classList.remove("hidden");
-            feedbackBox.classList.add("bg-rose-50", "dark:bg-rose-950/40", "text-rose-700", "dark:text-rose-300");
-            feedbackBox.innerHTML = `
-              <div class="flex items-center justify-between">
-                <span>Not quite. ${q.explanation}</span>
-                <button id="quiz-retry-btn" class="ml-2 px-3 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700">Try Next →</button>
-              </div>
-            `;
-            document.getElementById("quiz-retry-btn")?.addEventListener("click", () => {
-              state.quizQuestionIndex++;
-              renderQuizQuestion();
-            });
-          }
-        }
-      });
-
-      optContainer.appendChild(btn);
+  if (fcRepeatAudio) {
+    fcRepeatAudio.addEventListener("click", (e) => {
+      e.stopPropagation();
+      repeatLastAudio();
     });
   }
 
-  // Quick play button on dashboard cards
-  document.querySelectorAll(".launch-quick-quiz-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      switchView("games");
+  // CEFR Level Chips Click Listeners
+  document.querySelectorAll(".fc-level-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const level = chip.getAttribute("data-level");
+      state.selectedLevel = level;
+      Storage.setSelectedLevel(level);
+      state.currentCardIndex = 0;
+      loadFlashcardDeck();
     });
   });
 
-  // ========================================================
-  // 10. IELTS VOCABULARY VIEW
-  // ========================================================
-  function renderIeltsTopics() {
-    const grid = document.getElementById("ielts-topics-grid");
-    if (!grid) return;
-    grid.innerHTML = "";
+  // Category & Status filter listeners in Flashcards
+  const fcCatSelect = document.getElementById("fc-category-select");
+  const fcStatSelect = document.getElementById("fc-status-select");
 
-    initialData.ieltsTopics.forEach(topic => {
-      const card = document.createElement("div");
-      card.className = "bg-white dark:bg-[#111827] rounded-3xl p-6 sm:p-7 border border-slate-200/80 dark:border-slate-800/80 shadow-xs hover:shadow-md transition-all interactive-card flex flex-col justify-between";
-      card.innerHTML = `
-        <div>
-          <div class="flex items-center justify-between mb-4">
-            <span class="text-xs font-extrabold px-3 py-1 rounded-full bg-cyan-50 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800">
-              ${topic.bandTarget} Focus
-            </span>
-            <span class="text-xs font-bold text-slate-400">${topic.wordCount} Academic Terms</span>
-          </div>
-
-          <h3 class="font-display font-bold text-xl text-slate-900 dark:text-white mb-2">${topic.title}</h3>
-          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-4">${topic.description}</p>
-
-          <!-- Key terms preview -->
-          <div class="mb-4">
-            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2">High-Score Collocations</span>
-            <div class="flex flex-wrap gap-1.5">
-              ${topic.keyWords.map(kw => `
-                <span class="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
-                  ${kw}
-                </span>
-              `).join("")}
-            </div>
-          </div>
-
-          <!-- Essay Snippet Box -->
-          <div class="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 mb-6">
-            <span class="text-[10px] uppercase font-bold text-cyan-600 dark:text-cyan-400 tracking-wider block mb-1">Task 2 Model Sentence</span>
-            <p class="text-xs text-slate-600 dark:text-slate-300 italic">"${topic.sampleEssaySnippet}"</p>
-          </div>
-        </div>
-
-        <div class="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <button class="practice-ielts-btn w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-2" data-topic-id="${topic.id}">
-            <i data-lucide="layers" class="w-3.5 h-3.5"></i>
-            <span>Practice Band 8+ Set</span>
-          </button>
-        </div>
-      `;
-
-      grid.appendChild(card);
+  if (fcCatSelect) {
+    fcCatSelect.addEventListener("change", (e) => {
+      state.flashcardCategory = e.target.value;
+      state.currentCardIndex = 0;
+      loadFlashcardDeck();
     });
+  }
 
-    grid.querySelectorAll(".practice-ielts-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        state.currentDeckKey = "c1-academic";
-        switchView("flashcards");
-        showToast("Loaded IELTS academic deck into flashcards", "info");
-      });
+  if (fcStatSelect) {
+    fcStatSelect.addEventListener("change", (e) => {
+      state.flashcardStatus = e.target.value;
+      state.currentCardIndex = 0;
+      loadFlashcardDeck();
+    });
+  }
+
+  // Voice Accent Switcher (American vs British)
+  const fcVoiceUs = document.getElementById("fc-voice-us");
+  const fcVoiceUk = document.getElementById("fc-voice-uk");
+  const fcSpeedSelect = document.getElementById("fc-speed-select");
+
+  function setVoiceAccent(accent) {
+    state.voiceAccent = accent;
+    const settings = Storage.getSettings();
+    settings.accentVoice = accent;
+    Storage.saveSettings(settings);
+
+    if (fcVoiceUs && fcVoiceUk) {
+      if (accent === "en-US") {
+        fcVoiceUs.className = "fc-voice-btn px-2.5 py-1 rounded-lg bg-white dark:bg-[#111827] text-brand-600 dark:text-brand-400 shadow-xs font-bold";
+        fcVoiceUk.className = "fc-voice-btn px-2.5 py-1 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white";
+        showToast("Pronunciation set to American English 🇺🇸", "info");
+      } else {
+        fcVoiceUk.className = "fc-voice-btn px-2.5 py-1 rounded-lg bg-white dark:bg-[#111827] text-brand-600 dark:text-brand-400 shadow-xs font-bold";
+        fcVoiceUs.className = "fc-voice-btn px-2.5 py-1 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white";
+        showToast("Pronunciation set to British English 🇬🇧", "info");
+      }
+    }
+  }
+
+  if (fcVoiceUs) fcVoiceUs.addEventListener("click", () => setVoiceAccent("en-US"));
+  if (fcVoiceUk) fcVoiceUk.addEventListener("click", () => setVoiceAccent("en-GB"));
+
+  if (fcSpeedSelect) {
+    fcSpeedSelect.value = state.voiceSpeed.toString();
+    fcSpeedSelect.addEventListener("change", (e) => {
+      state.voiceSpeed = parseFloat(e.target.value);
+      const settings = Storage.getSettings();
+      settings.playbackSpeed = state.voiceSpeed;
+      Storage.saveSettings(settings);
+      showToast(`Playback speed set to ${state.voiceSpeed}x`, "info");
     });
   }
 
   // ========================================================
-  // 11. MY DICTIONARY VIEW (Search, Filter, Add, Star, Delete)
+  // 9. MY DICTIONARY VIEW (Dual-language search & Filtering)
   // ========================================================
   function renderDictionary() {
     const grid = document.getElementById("dictionary-words-grid");
     const emptyState = document.getElementById("dict-empty-state");
+    const totalCountEl = document.getElementById("dict-total-count");
     if (!grid) return;
 
-    let words = Storage.getDictionary();
+    const words = Storage.getFilteredVocabulary({
+      search: state.dictSearchQuery,
+      level: state.dictLevel,
+      category: state.dictCategory,
+      status: state.dictStatus
+    });
 
-    // Filter by Search Query
-    if (state.dictSearchQuery.trim()) {
-      const q = state.dictSearchQuery.toLowerCase();
-      words = words.filter(w => 
-        w.word.toLowerCase().includes(q) || 
-        w.definition.toLowerCase().includes(q) ||
-        (w.tags && w.tags.some(t => t.toLowerCase().includes(q)))
-      );
-    }
-
-    // Filter by Status Tab
-    if (state.dictFilterStatus === "starred") {
-      words = words.filter(w => w.isStarred);
-    } else if (state.dictFilterStatus === "mastered") {
-      words = words.filter(w => w.isMastered);
-    } else if (state.dictFilterStatus === "learning") {
-      words = words.filter(w => !w.isMastered);
-    }
+    if (totalCountEl) totalCountEl.textContent = Storage.getAllVocabulary().length;
 
     grid.innerHTML = "";
 
@@ -989,54 +1023,91 @@ document.addEventListener("DOMContentLoaded", () => {
 
     words.forEach(item => {
       const card = document.createElement("div");
-      card.className = "bg-white dark:bg-[#111827] rounded-2xl p-5 border border-slate-200/80 dark:border-slate-800/80 shadow-xs hover:shadow-md transition-all interactive-card";
+      card.className = "bg-white dark:bg-[#111827] rounded-3xl p-5 sm:p-6 border border-slate-200/80 dark:border-slate-800/80 shadow-xs hover:shadow-md transition-all interactive-card flex flex-col justify-between";
       
       card.innerHTML = `
-        <div class="flex items-start justify-between mb-3">
-          <div class="flex items-center gap-2.5">
-            <button class="audio-btn p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-brand-600 dark:text-brand-400 hover:scale-110 transition-transform" data-pronounce="${item.word}" title="Pronounce">
-              <i data-lucide="volume-2" class="w-4 h-4"></i>
-            </button>
-            <div>
-              <h4 class="font-display font-bold text-lg text-slate-900 dark:text-white">${item.word}</h4>
-              <div class="flex items-center gap-2 text-xs text-slate-400">
+        <div>
+          <!-- Top Row: Thumbnail + Word + Translation -->
+          <div class="flex items-start gap-3.5 mb-3">
+            <div class="w-14 h-14 rounded-2xl overflow-hidden bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex-shrink-0 flex items-center justify-center">
+              ${item.image ? `
+                <img src="${item.image}" alt="${item.word}" class="w-full h-full object-cover" onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');" />
+                <div class="hidden text-brand-600 font-bold text-xs"><i data-lucide="book" class="w-5 h-5"></i></div>
+              ` : `
+                <div class="text-brand-600 font-bold text-xs"><i data-lucide="book" class="w-5 h-5"></i></div>
+              `}
+            </div>
+
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between">
+                <h4 class="font-display font-extrabold text-lg text-slate-900 dark:text-white truncate">${item.word}</h4>
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                  <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-800">
+                    ${item.level}
+                  </span>
+                  <button class="dict-star-btn p-1.5 rounded-lg text-slate-300 hover:text-amber-500 transition-colors ${item.isFavorite ? 'text-amber-500' : ''}" data-word-id="${item.id}" title="Star word">
+                    <i data-lucide="star" class="w-4 h-4 fill-current"></i>
+                  </button>
+                  <button class="dict-diff-btn p-1.5 rounded-lg text-slate-300 hover:text-amber-600 transition-colors ${item.isDifficult ? 'text-amber-500' : ''}" data-word-id="${item.id}" title="Toggle Difficult">
+                    <i data-lucide="alert-triangle" class="w-4 h-4 fill-current"></i>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Uzbek translation highlight -->
+              <div class="text-xs font-bold text-brand-600 dark:text-brand-400 mt-0.5">
+                🇺🇿 ${item.uzbek}
+              </div>
+
+              <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
                 <span class="font-mono">${item.phonetic || ''}</span>
                 <span>•</span>
                 <span class="italic">${item.partOfSpeech}</span>
+                <span>•</span>
+                <span class="font-semibold text-slate-500 dark:text-slate-400">${item.category}</span>
               </div>
             </div>
           </div>
 
-          <div class="flex items-center gap-1.5">
-            <span class="text-[11px] font-bold px-2 py-0.5 rounded-md bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-900/60">
-              ${item.level || 'C1'}
-            </span>
-            <button class="dict-star-btn p-1.5 rounded-lg text-slate-300 hover:text-amber-500 transition-colors ${item.isStarred ? 'text-amber-500' : ''}" data-word-id="${item.id}" title="Star word">
-              <i data-lucide="star" class="w-4 h-4 fill-current"></i>
+          <!-- English Definition -->
+          <p class="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed mb-3">
+            ${item.definition}
+          </p>
+
+          <!-- Contextual Example with Uzbek sentence translation -->
+          ${item.example ? `
+            <div class="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs mb-3 space-y-1">
+              <p class="text-slate-700 dark:text-slate-200 italic">"${item.example}"</p>
+              ${item.uzbekSentence ? `
+                <p class="text-slate-500 dark:text-slate-400 font-medium">🇺🇿 "${item.uzbekSentence}"</p>
+              ` : ''}
+            </div>
+          ` : ''}
+
+          <!-- Synonyms -->
+          ${item.synonyms && item.synonyms.length > 0 ? `
+            <div class="flex flex-wrap items-center gap-1.5 mb-3 text-[11px]">
+              <span class="font-semibold text-slate-400">Synonyms:</span>
+              ${item.synonyms.map(s => `<span class="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">${s}</span>`).join('')}
+            </div>
+          ` : ''}
+        </div>
+
+        <!-- Footer Actions -->
+        <div class="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+          <button class="audio-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-brand-600 dark:text-brand-400 hover:bg-indigo-100 font-bold transition-colors" data-pronounce="${item.word}" title="Listen">
+            <i data-lucide="volume-2" class="w-3.5 h-3.5"></i>
+            <span>Pronounce</span>
+          </button>
+
+          <div class="flex items-center gap-2">
+            <button class="dict-mastered-toggle text-xs font-bold px-3 py-1.5 rounded-xl transition-colors ${item.isMastered ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}" data-word-id="${item.id}">
+              ${item.isMastered ? 'Mastered ✓' : 'Mark Known'}
             </button>
-            <button class="dict-delete-btn p-1.5 rounded-lg text-slate-300 hover:text-rose-500 transition-colors" data-word-id="${item.id}" title="Remove word">
+            <button class="dict-delete-btn p-1.5 rounded-xl text-slate-300 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors" data-word-id="${item.id}" title="Remove word">
               <i data-lucide="trash-2" class="w-4 h-4"></i>
             </button>
           </div>
-        </div>
-
-        <p class="text-xs sm:text-sm text-slate-700 dark:text-slate-300 leading-relaxed mb-3">
-          ${item.definition}
-        </p>
-
-        ${item.example ? `
-          <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 italic mb-4">
-            "${item.example}"
-          </div>
-        ` : ''}
-
-        <div class="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
-          <div class="flex flex-wrap gap-1">
-            ${(item.tags || []).map(t => `<span class="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-medium text-slate-600 dark:text-slate-400">${t}</span>`).join('')}
-          </div>
-          <button class="dict-mastered-toggle text-xs font-bold px-2.5 py-1 rounded-lg ${item.isMastered ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}" data-word-id="${item.id}">
-            ${item.isMastered ? 'Mastered ✓' : 'Learning'}
-          </button>
         </div>
       `;
 
@@ -1047,8 +1118,19 @@ document.addEventListener("DOMContentLoaded", () => {
     grid.querySelectorAll(".dict-star-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-word-id");
-        Storage.toggleBookmark(id);
+        Storage.toggleFavorite(id);
         renderDictionary();
+        refreshIcons();
+      });
+    });
+
+    // Difficult toggle handlers
+    grid.querySelectorAll(".dict-diff-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-word-id");
+        Storage.toggleDifficult(id);
+        renderDictionary();
+        updateDashboardMetrics();
         refreshIcons();
       });
     });
@@ -1057,9 +1139,12 @@ document.addEventListener("DOMContentLoaded", () => {
     grid.querySelectorAll(".dict-mastered-toggle").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-word-id");
-        Storage.toggleMastered(id);
-        renderDictionary();
-        updateDashboardMetrics();
+        const word = Storage.getVocabularyWord(id);
+        if (word) {
+          Storage.markKnown(id, !word.isMastered);
+          renderDictionary();
+          updateDashboardMetrics();
+        }
       });
     });
 
@@ -1067,18 +1152,17 @@ document.addEventListener("DOMContentLoaded", () => {
     grid.querySelectorAll(".dict-delete-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-word-id");
-        Storage.deleteDictionaryWord(id);
+        Storage.deleteVocabularyWord(id);
         showToast("Word removed from your dictionary", "info");
         renderDictionary();
         updateDashboardMetrics();
-        refreshIcons();
       });
     });
 
     refreshIcons();
   }
 
-  // Dictionary Search input handler
+  // Dictionary Search input handler (dual language English/Uzbek)
   const dictSearchInput = document.getElementById("dict-search-input");
   if (dictSearchInput) {
     dictSearchInput.addEventListener("input", (e) => {
@@ -1087,14 +1171,35 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Dictionary Status Filters (All / Starred / Mastered / Learning)
+  // Dictionary CEFR level filter buttons
+  document.querySelectorAll(".dict-level-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".dict-level-btn").forEach(b => {
+        b.className = "dict-level-btn px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold hover:bg-slate-200";
+      });
+      btn.className = "dict-level-btn px-2.5 py-1 rounded-lg bg-brand-600 text-white text-xs font-bold shadow-xs";
+      state.dictLevel = btn.getAttribute("data-level") || "all";
+      renderDictionary();
+    });
+  });
+
+  // Dictionary Category filter dropdown
+  const dictCategoryFilter = document.getElementById("dict-category-filter");
+  if (dictCategoryFilter) {
+    dictCategoryFilter.addEventListener("change", (e) => {
+      state.dictCategory = e.target.value;
+      renderDictionary();
+    });
+  }
+
+  // Dictionary Status filter chips
   document.querySelectorAll(".dict-filter-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".dict-filter-btn").forEach(b => {
         b.className = "dict-filter-btn px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white text-xs font-semibold";
       });
       btn.className = "dict-filter-btn px-3 py-1.5 rounded-lg bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 text-xs font-bold";
-      state.dictFilterStatus = btn.getAttribute("data-status") || "all";
+      state.dictStatus = btn.getAttribute("data-status") || "all";
       renderDictionary();
     });
   });
@@ -1128,29 +1233,33 @@ document.addEventListener("DOMContentLoaded", () => {
     addWordForm.addEventListener("submit", (e) => {
       e.preventDefault();
       const word = document.getElementById("modal-word-input").value.trim();
+      const uzbek = document.getElementById("modal-uzbek-input").value.trim();
       const phonetic = document.getElementById("modal-phonetic-input").value.trim();
       const pos = document.getElementById("modal-pos-input").value;
       const level = document.getElementById("modal-level-input").value;
+      const category = document.getElementById("modal-category-input").value;
       const def = document.getElementById("modal-def-input").value.trim();
       const example = document.getElementById("modal-example-input").value.trim();
+      const uzbekSentence = document.getElementById("modal-uzbek-sentence-input").value.trim();
 
-      if (!word || !def) {
-        showToast("Word and Definition are required", "warning");
+      if (!word || !uzbek || !def) {
+        showToast("Word, Uzbek translation, and Definition are required", "warning");
         return;
       }
 
-      Storage.addDictionaryWord({
+      Storage.addCustomWord({
         word,
+        uzbek,
         phonetic,
         partOfSpeech: pos,
         level,
+        category,
         definition: def,
         example,
-        tags: ["Custom", level]
+        uzbekSentence
       });
 
-      Storage.addXP(20);
-      showToast(`Added "${word}" to dictionary! +20 XP`, "success");
+      showToast(`Added "${word}" (${uzbek}) to dictionary! +20 XP`, "success");
       updateDashboardMetrics();
       closeAddModal();
       renderDictionary();
@@ -1158,7 +1267,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ========================================================
-  // 12. REVIEW VIEW (SPACED REPETITION CONTROLLER)
+  // 10. REVIEW VIEW (SPACED REPETITION CONTROLLER)
   // ========================================================
   function renderReviewQueue() {
     const queue = Storage.getReviewQueue();
@@ -1173,7 +1282,7 @@ document.addEventListener("DOMContentLoaded", () => {
               <i data-lucide="check-circle-2" class="w-8 h-8"></i>
             </div>
             <h3 class="font-display font-bold text-xl text-slate-900 dark:text-white">All Caught Up! 🎉</h3>
-            <p class="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1">You have reviewed all due words for today. Next review interval unlocks in 4 hours.</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto mt-1">You have reviewed all due and difficult words. Next review wave unlocks shortly.</p>
           </div>
         `;
       }
@@ -1194,10 +1303,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const answerReveal = document.getElementById("srs-answer-reveal");
     const showAnsBtn = document.getElementById("srs-show-answer-btn");
 
-    if (cardTitle) cardTitle.textContent = item.word;
+    if (cardTitle) cardTitle.textContent = `${item.word} (${item.uzbek})`;
     if (wordDisplay) wordDisplay.textContent = item.word;
-    if (phoneticDisplay) phoneticDisplay.textContent = `${item.phonetic} • ${item.partOfSpeech}`;
-    if (defDisplay) defDisplay.textContent = item.definition;
+    if (phoneticDisplay) phoneticDisplay.textContent = `${item.phonetic} • ${item.partOfSpeech} • ${item.level}`;
+    if (defDisplay) {
+      defDisplay.innerHTML = `
+        <div class="font-bold text-brand-600 dark:text-brand-400 mb-1">🇺🇿 ${item.uzbek}</div>
+        <div>${item.definition}</div>
+        ${item.example ? `<div class="mt-2 text-xs text-slate-500 italic">"${item.example}"</div>` : ''}
+      `;
+    }
     if (progressText) progressText.textContent = `Card ${state.currentReviewIndex + 1} of ${queue.length}`;
     if (audioBtn) audioBtn.setAttribute("data-pronounce", item.word);
 
@@ -1235,12 +1350,13 @@ document.addEventListener("DOMContentLoaded", () => {
             </button>
             <div>
               <span class="font-bold text-slate-900 dark:text-white">${qItem.word}</span>
-              <span class="text-slate-400 block">${qItem.partOfSpeech} · Reviewed ${qItem.timesReviewed || 1}x</span>
+              <span class="text-brand-600 font-semibold ml-1.5">(${qItem.uzbek})</span>
+              <span class="text-slate-400 block text-[11px]">${qItem.partOfSpeech} · ${qItem.level} · ${qItem.category}</span>
             </div>
           </div>
-          <div class="flex items-center gap-4">
-            <span class="text-slate-400">Retention: ${qItem.retentionScore}%</span>
-            <span class="font-bold px-2.5 py-1 rounded-full ${qItem.urgency === 'urgent' ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-600' : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700'}">
+          <div class="flex items-center gap-3">
+            <span class="text-slate-400">Score: ${qItem.retentionScore}%</span>
+            <span class="font-bold px-2.5 py-1 rounded-full ${qItem.urgency === 'urgent' ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700' : 'bg-brand-50 dark:bg-brand-950/60 text-brand-600'}">
               ${qItem.dueInterval}
             </span>
           </div>
@@ -1253,6 +1369,170 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ========================================================
+  // 11. GAMES VIEW & ARENA HOOK
+  // ========================================================
+  function renderGameModes() {
+    if (typeof GamesEngine !== "undefined") {
+      GamesEngine.init();
+    }
+  }
+
+  // Quick play buttons on dashboard cards
+  document.querySelectorAll(".launch-quick-quiz-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      switchView("games");
+      if (typeof GamesEngine !== "undefined") {
+        GamesEngine.launchGame("game-missing-letters");
+      }
+    });
+  });
+
+  function renderQuizQuestion() {
+    const qIndex = state.quizQuestionIndex % initialData.quickQuizQuestions.length;
+    const q = initialData.quickQuizQuestions[qIndex];
+
+    const qNum = document.getElementById("quiz-question-number");
+    const qText = document.getElementById("quiz-question-text");
+    const optContainer = document.getElementById("quiz-options-container");
+    const feedbackBox = document.getElementById("quiz-feedback-box");
+
+    if (qNum) qNum.textContent = `Question ${qIndex + 1} of ${initialData.quickQuizQuestions.length}`;
+    if (qText) qText.textContent = q.question;
+    if (feedbackBox) {
+      feedbackBox.classList.add("hidden");
+      feedbackBox.className = "mt-4 p-3 rounded-xl hidden text-xs font-semibold";
+    }
+
+    if (!optContainer) return;
+    optContainer.innerHTML = "";
+
+    q.options.forEach((opt, idx) => {
+      const btn = document.createElement("button");
+      btn.className = "quiz-opt-btn p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-brand-500 bg-slate-50 dark:bg-slate-800 font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100 text-left transition-all flex items-center justify-between";
+      btn.innerHTML = `
+        <span>${opt}</span>
+        <span class="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs flex items-center justify-center">${['A', 'B', 'C', 'D'][idx]}</span>
+      `;
+
+      btn.addEventListener("click", () => {
+        optContainer.querySelectorAll("button").forEach(b => b.disabled = true);
+
+        if (idx === q.answerIndex) {
+          btn.classList.add("bg-emerald-500", "text-white", "border-emerald-600");
+          Storage.addXP(25);
+          updateDashboardMetrics();
+          showToast("Correct! +25 XP awarded 🚀", "success");
+
+          if (feedbackBox) {
+            feedbackBox.classList.remove("hidden");
+            feedbackBox.classList.add("bg-emerald-50", "dark:bg-emerald-950/40", "text-emerald-700", "dark:text-emerald-300");
+            feedbackBox.innerHTML = `
+              <div class="flex items-center justify-between">
+                <span>✓ Excellent! ${q.explanation}</span>
+                <button id="quiz-next-q-btn" class="ml-2 px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700">Next Question →</button>
+              </div>
+            `;
+            document.getElementById("quiz-next-q-btn")?.addEventListener("click", () => {
+              state.quizQuestionIndex++;
+              renderQuizQuestion();
+            });
+          }
+        } else {
+          btn.classList.add("bg-rose-500", "text-white", "border-rose-600");
+          const correctBtn = optContainer.querySelectorAll("button")[q.answerIndex];
+          if (correctBtn) correctBtn.classList.add("bg-emerald-100", "dark:bg-emerald-900/50", "border-emerald-500");
+
+          if (feedbackBox) {
+            feedbackBox.classList.remove("hidden");
+            feedbackBox.classList.add("bg-rose-50", "dark:bg-rose-950/40", "text-rose-700", "dark:text-rose-300");
+            feedbackBox.innerHTML = `
+              <div class="flex items-center justify-between">
+                <span>Not quite. ${q.explanation}</span>
+                <button id="quiz-retry-btn" class="ml-2 px-3 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700">Try Next →</button>
+              </div>
+            `;
+            document.getElementById("quiz-retry-btn")?.addEventListener("click", () => {
+              state.quizQuestionIndex++;
+              renderQuizQuestion();
+            });
+          }
+        }
+      });
+
+      optContainer.appendChild(btn);
+    });
+  }
+
+  // Quick play button on dashboard cards
+  document.querySelectorAll(".launch-quick-quiz-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      switchView("games");
+    });
+  });
+
+  // ========================================================
+  // 12. IELTS VOCABULARY VIEW
+  // ========================================================
+  function renderIeltsTopics() {
+    const grid = document.getElementById("ielts-topics-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+
+    initialData.ieltsTopics.forEach(topic => {
+      const card = document.createElement("div");
+      card.className = "bg-white dark:bg-[#111827] rounded-3xl p-6 sm:p-7 border border-slate-200/80 dark:border-slate-800/80 shadow-xs hover:shadow-md transition-all interactive-card flex flex-col justify-between";
+      card.innerHTML = `
+        <div>
+          <div class="flex items-center justify-between mb-4">
+            <span class="text-xs font-extrabold px-3 py-1 rounded-full bg-cyan-50 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800">
+              ${topic.bandTarget} Focus
+            </span>
+            <span class="text-xs font-bold text-slate-400">${topic.wordCount} Academic Terms</span>
+          </div>
+
+          <h3 class="font-display font-bold text-xl text-slate-900 dark:text-white mb-2">${topic.title}</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mb-4">${topic.description}</p>
+
+          <div class="mb-4">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2">High-Score Collocations</span>
+            <div class="flex flex-wrap gap-1.5">
+              ${topic.keyWords.map(kw => `
+                <span class="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                  ${kw}
+                </span>
+              `).join("")}
+            </div>
+          </div>
+
+          <div class="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 mb-6">
+            <span class="text-[10px] uppercase font-bold text-cyan-600 dark:text-cyan-400 tracking-wider block mb-1">Task 2 Model Sentence</span>
+            <p class="text-xs text-slate-600 dark:text-slate-300 italic">"${topic.sampleEssaySnippet}"</p>
+          </div>
+        </div>
+
+        <div class="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <button class="practice-ielts-btn w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-2" data-topic-id="${topic.id}">
+            <i data-lucide="layers" class="w-3.5 h-3.5"></i>
+            <span>Practice IELTS Flashcards</span>
+          </button>
+        </div>
+      `;
+
+      grid.appendChild(card);
+    });
+
+    grid.querySelectorAll(".practice-ielts-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        state.selectedLevel = "C1";
+        state.flashcardCategory = "Environment";
+        Storage.setSelectedLevel("C1");
+        switchView("flashcards");
+        showToast("Loaded IELTS Academic study set into flashcards", "info");
+      });
+    });
+  }
+
+  // ========================================================
   // 13. STATISTICS VIEW & HEATMAP
   // ========================================================
   function renderStatistics() {
@@ -1260,7 +1540,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!heatmap) return;
     heatmap.innerHTML = "";
 
-    // Generate 12 columns x 7 rows = 84 days of mock activity
     const levels = ["bg-slate-200 dark:bg-slate-700", "bg-indigo-200 dark:bg-indigo-900", "bg-indigo-400 dark:bg-indigo-700", "bg-indigo-600 dark:bg-indigo-500"];
     
     for (let c = 0; c < 12; c++) {
@@ -1290,10 +1569,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const s = Storage.getSettings();
     voiceAccentSelect.value = s.accentVoice || "en-US";
     voiceAccentSelect.addEventListener("change", (e) => {
-      const current = Storage.getSettings();
-      current.accentVoice = e.target.value;
-      Storage.saveSettings(current);
-      showToast("Voice accent preference saved", "info");
+      setVoiceAccent(e.target.value);
     });
   }
 
@@ -1301,8 +1577,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const s = Storage.getSettings();
     voiceSpeedSelect.value = s.playbackSpeed || 1.0;
     voiceSpeedSelect.addEventListener("change", (e) => {
+      state.voiceSpeed = parseFloat(e.target.value);
       const current = Storage.getSettings();
-      current.playbackSpeed = parseFloat(e.target.value);
+      current.playbackSpeed = state.voiceSpeed;
       Storage.saveSettings(current);
       showToast("Playback speed updated", "info");
     });
@@ -1389,13 +1666,16 @@ document.addEventListener("DOMContentLoaded", () => {
     searchResults.innerHTML = "";
 
     const q = query.toLowerCase().trim();
-    const dict = Storage.getDictionary();
-    const matched = dict.filter(item => 
-      !q || item.word.toLowerCase().includes(q) || item.definition.toLowerCase().includes(q)
-    ).slice(0, 6);
+    const vocab = Storage.getAllVocabulary();
+    const matched = vocab.filter(item => 
+      !q || 
+      item.word.toLowerCase().includes(q) || 
+      item.uzbek.toLowerCase().includes(q) ||
+      (item.definition && item.definition.toLowerCase().includes(q))
+    ).slice(0, 8);
 
     if (matched.length === 0) {
-      searchResults.innerHTML = `<div class="p-4 text-xs text-slate-400 text-center">No words found matching "${query}"</div>`;
+      searchResults.innerHTML = `<div class="p-4 text-xs text-slate-400 text-center">No vocabulary found matching "${query}"</div>`;
       return;
     }
 
@@ -1404,13 +1684,18 @@ document.addEventListener("DOMContentLoaded", () => {
       row.className = "p-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/80 cursor-pointer flex items-center justify-between transition-colors";
       row.innerHTML = `
         <div class="flex items-center gap-3">
-          <i data-lucide="book" class="w-4 h-4 text-brand-500"></i>
+          <div class="w-8 h-8 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center flex-shrink-0">
+            ${item.image ? `<img src="${item.image}" alt="${item.word}" class="w-full h-full object-cover">` : `<i data-lucide="book" class="w-4 h-4 text-brand-500"></i>`}
+          </div>
           <div>
-            <span class="text-xs font-bold text-slate-900 dark:text-white block">${item.word}</span>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-slate-900 dark:text-white">${item.word}</span>
+              <span class="text-[11px] text-brand-600 dark:text-brand-400 font-semibold">(${item.uzbek})</span>
+            </div>
             <span class="text-[11px] text-slate-400 line-clamp-1">${item.definition}</span>
           </div>
         </div>
-        <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500">${item.level || 'C1'}</span>
+        <span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500">${item.level}</span>
       `;
 
       row.addEventListener("click", () => {
@@ -1444,7 +1729,6 @@ document.addEventListener("DOMContentLoaded", () => {
   function togglePopover(popover) {
     if (!popover) return;
     const isHidden = popover.classList.contains("hidden");
-    // Close other popovers first
     if (notifPopover) notifPopover.classList.add("hidden");
     if (userMenuPopover) userMenuPopover.classList.add("hidden");
 
@@ -1468,7 +1752,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Close menus on click outside
   document.addEventListener("click", () => {
     if (notifPopover) notifPopover.classList.add("hidden");
     if (userMenuPopover) userMenuPopover.classList.add("hidden");
@@ -1514,7 +1797,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ========================================================
-  // 18. APP INITIALIZATION
+  // 18. INITIALIZE APPLICATION
   // ========================================================
   function initApp() {
     buildMobileDrawerItems();
@@ -1524,15 +1807,16 @@ document.addEventListener("DOMContentLoaded", () => {
     renderDashboardReviewPreview();
     renderDashboardAchievements();
     renderLearnUnits();
-    renderFlashcard();
-    renderGameModes();
-    renderQuizQuestion();
+    loadFlashcardDeck();
+    if (typeof GamesEngine !== "undefined") {
+      GamesEngine.init();
+    }
     renderIeltsTopics();
     renderDictionary();
     renderReviewQueue();
     renderStatistics();
 
-    // Check initial hash route or default to dashboard
+    // Route based on URL hash or default to dashboard
     const initialHash = window.location.hash.replace("#", "");
     if (initialHash && viewTitles[initialHash]) {
       switchView(initialHash);
